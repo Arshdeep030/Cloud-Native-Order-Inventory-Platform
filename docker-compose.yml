@@ -1,0 +1,16 @@
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: cloud-order-postgres
+    environment:
+      POSTGRES_USER: order_user
+      POSTGRES_PASSWORD: order_password
+      POSTGRES_DB: order_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
