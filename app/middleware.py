@@ -4,6 +4,8 @@ import uuid
 
 from fastapi import Request
 
+from app.metrics import HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS
+
 
 logger = logging.getLogger("cloud-order-platform.http")
 
@@ -22,7 +24,21 @@ async def request_logging_middleware(
 
     response = await call_next(request)
 
-    duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    duration_s = time.perf_counter() - start_time
+    duration_ms = round(duration_s * 1000, 2)
+
+    # Record Prometheus Metrics
+    endpoint = request.url.path
+    HTTP_REQUESTS_TOTAL.labels(
+        method=request.method,
+        endpoint=endpoint,
+        status=str(response.status_code)
+    ).inc()
+
+    HTTP_REQUEST_DURATION_SECONDS.labels(
+        method=request.method,
+        endpoint=endpoint
+    ).observe(duration_s)
 
     logger.info(
         f"{request.method} {request.url.path} responded {response.status_code} in {duration_ms}ms",

@@ -6,6 +6,7 @@ from app.schemas import ProductCreate, ProductUpdate
 
 from app.repositories.product_repository import product_repository
 from app.repositories.cache_repository import cache_repository
+from app.metrics import PRODUCTS_CREATED_TOTAL
 
 
 class ProductService:
@@ -66,10 +67,12 @@ class ProductService:
             quantity=product_data.quantity
         )
 
-        return product_repository.create_product(
+        created = product_repository.create_product(
             db,
             product
         )
+        PRODUCTS_CREATED_TOTAL.inc()
+        return created
 
     def update_product(
         self,

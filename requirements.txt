@@ -12,3 +12,4 @@ pika
 httpx
 pytest
 alembic
+prometheus-client

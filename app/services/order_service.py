@@ -16,6 +16,7 @@ from app.repositories.idempotency_repository import idempotency_repository
 from app.repositories.cache_repository import cache_repository
 from app.messaging.events import Event, create_correlation_id
 from app.messaging.publisher import publish_order_created
+from app.metrics import ORDERS_CREATED_TOTAL
 
 
 logger = logging.getLogger(
@@ -158,6 +159,8 @@ class OrderService:
             publish_order_created(
                 event.to_dict()
             )
+
+            ORDERS_CREATED_TOTAL.inc()
 
             logger.info(
                 "order_created order_id=%s customer_id=%s total_amount=%s correlation_id=%s",

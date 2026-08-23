@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
 from app.middleware import request_logging_middleware
 from app.exceptions import AppException
 from app.routers import products, orders, auth, health
@@ -44,8 +46,17 @@ app.include_router(products.router)
 app.include_router(orders.router)
 app.include_router(auth.router)
 
+
 @app.get("/")
 def root():
     return {
         "message": "Cloud Order Platform API"
     }
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
