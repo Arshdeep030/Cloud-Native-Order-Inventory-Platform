@@ -111,3 +111,61 @@ jobs:
       - name: Build Order Worker image
         run: |
           docker build -t cloud-order-worker:test .
+
+  startup-health:
+
+    needs: docker-build
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create .env from template
+        run: |
+          cp .env.example .env
+
+      - name: Start Docker Compose stack
+        run: |
+          docker compose up -d
+
+      - name: Show running containers
+        run: |
+          docker compose ps
+
+      - name: Wait for services to start
+        run: |
+          sleep 15
+
+      - name: Check API liveness
+        run: |
+          curl --fail http://localhost:8001/health/live
+
+      - name: Check API readiness
+        run: |
+          curl --fail http://localhost:8001/health/ready
+
+      - name: Check Gateway liveness
+        run: |
+          curl --fail http://localhost:8000/health/live
+
+      - name: Check Gateway readiness
+        run: |
+          curl --fail http://localhost:8000/health/ready
+
+      - name: Show container status
+        if: always()
+        run: |
+          docker compose ps
+
+      - name: Show service logs
+        if: failure()
+        run: |
+          docker compose logs --tail=100
+
+      - name: Stop Docker Compose stack
+        if: always()
+        run: |
+          docker compose down -v
