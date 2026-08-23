@@ -11,3 +11,4 @@ redis
 pika
 httpx
 pytest
+alembic
