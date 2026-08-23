@@ -10,14 +10,14 @@ class Settings(BaseSettings):
         "production"
     ] = "development"
 
-    database_url: str
+    database_url: str = "postgresql+psycopg://order_user:order_password@localhost:5432/order_db"
 
     redis_url: str = "redis://localhost:6379"
 
     rabbitmq_host: str = "localhost"
     rabbitmq_port: int = 5672
 
-    jwt_secret: str
+    jwt_secret: str = "local-development-secret-change-this"
 
     order_service_url: str = "http://localhost:8000"
     inventory_service_url: str = "http://localhost:8001"

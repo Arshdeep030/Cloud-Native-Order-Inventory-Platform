@@ -9,7 +9,10 @@ from app.database import engine, Base
 import app.models
 from app.logging_config import configure_logging
 
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception:
+    pass
 
 configure_logging()
 
