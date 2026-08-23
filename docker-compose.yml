@@ -1,5 +1,53 @@
 services:
 
+  gateway:
+    build:
+      context: ./gateway
+    container_name: cloud-order-gateway
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      ORDER_SERVICE_URL: http://api:8000
+    depends_on:
+      - api
+
+  api:
+    build: .
+    container_name: cloud-order-api
+    env_file:
+      - .env
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://order_user:order_password@postgres:5432/order_db
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_HOST: rabbitmq
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+
+  order-worker:
+    build:
+      context: .
+    container_name: cloud-order-worker
+    env_file:
+      - .env
+    command: python -m app.messaging.order_worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://order_user:order_password@postgres:5432/order_db
+      RABBITMQ_HOST: rabbitmq
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+
   postgres:
     image: postgres:16
     container_name: cloud-order-postgres
@@ -11,6 +59,90 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_user -d order_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cloud-order-redis
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: cloud-order-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  inventory-postgres:
+    image: postgres:16
+    container_name: cloud-order-inventory-postgres
+    environment:
+      POSTGRES_USER: inventory_user
+      POSTGRES_PASSWORD: inventory_password
+      POSTGRES_DB: inventory_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - inventory_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory_user -d inventory_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  inventory:
+    build:
+      context: ./services/inventory
+    container_name: cloud-order-inventory
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      DATABASE_URL: postgresql+psycopg://inventory_user:inventory_password@inventory-postgres:5432/inventory_db
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      inventory-postgres:
+        condition: service_healthy
+
+  payment-postgres:
+    image: postgres:16
+    container_name: cloud-order-payment-postgres
+    environment:
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: payment_password
+      POSTGRES_DB: payment_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - payment_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user -d payment_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  payment:
+    build:
+      context: ./services/payment
+    container_name: cloud-order-payment
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      DATABASE_URL: postgresql+psycopg://payment_user:payment_password@payment-postgres:5432/payment_db
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      payment-postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  inventory_postgres_data:
+  payment_postgres_data:

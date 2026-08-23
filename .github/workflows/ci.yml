@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  test:
+
+    runs-on: ubuntu-latest
+
+    env:
+      ENVIRONMENT: testing
+      DATABASE_URL: postgresql+psycopg://order_user:order_password@localhost:5432/order_test_db
+      REDIS_URL: redis://localhost:6379
+      RABBITMQ_HOST: localhost
+      RABBITMQ_PORT: 5672
+      JWT_SECRET: local-development-secret-change-this
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pytest -v
