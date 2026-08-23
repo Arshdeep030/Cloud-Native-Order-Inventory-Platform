@@ -1,5 +1,6 @@
 from database import Base, engine
 from consumer import start_consumer
+from logging_config import configure_logging
 
 
 Base.metadata.create_all(
@@ -8,5 +9,5 @@ Base.metadata.create_all(
 
 
 if __name__ == "__main__":
-
+    configure_logging("inventory-service")
     start_consumer()

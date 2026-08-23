@@ -4,11 +4,7 @@ from datetime import datetime, timezone
 
 
 class JSONFormatter(logging.Formatter):
-    """
-    Standardized JSON Formatter for cloud-native structured logging.
-    Formats logs with timestamp, level, service, request_id, correlation_id, and custom context.
-    """
-    def __init__(self, service_name: str = "order-service"):
+    def __init__(self, service_name: str = "payment-service"):
         super().__init__()
         self.service_name = service_name
 
@@ -20,23 +16,14 @@ class JSONFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-
-        # Include structured context attributes if passed in extra={}
-        if hasattr(record, "request_id"):
-            log_obj["request_id"] = record.request_id
         if hasattr(record, "correlation_id"):
             log_obj["correlation_id"] = record.correlation_id
         if hasattr(record, "event"):
             log_obj["event"] = record.event
         if hasattr(record, "order_id"):
             log_obj["order_id"] = record.order_id
-        if hasattr(record, "product_id"):
-            log_obj["product_id"] = record.product_id
-
-        # Include any nested dictionary under extra_data
-        if hasattr(record, "extra_data") and isinstance(record.extra_data, dict):
-            for k, v in record.extra_data.items():
-                log_obj[k] = v
+        if hasattr(record, "event_id"):
+            log_obj["event_id"] = record.event_id
 
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
@@ -44,17 +31,11 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_obj)
 
 
-def configure_logging(service_name: str = "order-service", log_level: str = "INFO"):
-    """
-    Configures the root logger to output structured JSON to stdout.
-    """
+def configure_logging(service_name: str = "payment-service"):
     root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-
-    # Remove any existing handlers to prevent duplicate output
+    root_logger.setLevel(logging.INFO)
     while root_logger.handlers:
         root_logger.handlers.pop()
-
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter(service_name=service_name))
     root_logger.addHandler(handler)

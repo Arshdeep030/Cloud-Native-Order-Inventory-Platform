@@ -29,17 +29,18 @@ def process_order_workflow_event(event: dict, db: Session) -> bool:
     payload = event.get("payload", {})
     order_id = payload.get("order_id") if isinstance(payload, dict) else event.get("order_id")
 
-    print(
-        f"event_type={event_type} "
-        f"event_id={event_id} "
-        f"correlation_id={correlation_id} "
-        f"order_id={order_id}",
-        flush=True
+    logger.info(
+        f"Processing workflow event {event_type} for order {order_id}",
+        extra={
+            "event": event_type,
+            "event_id": event_id,
+            "correlation_id": correlation_id,
+            "order_id": order_id
+        }
     )
 
     if event_id and event_already_processed(db, event_id):
-        print(f"Event {event_id} already processed by Order Worker, skipping", flush=True)
-        logger.info("Event %s already processed by Order Worker", event_id)
+        logger.info(f"Event {event_id} already processed by Order Worker, skipping", extra={"event_id": event_id, "correlation_id": correlation_id})
         return True
 
     if not order_id:
@@ -56,8 +57,7 @@ def process_order_workflow_event(event: dict, db: Session) -> bool:
             "PAYMENT_PENDING"
         )
         if updated:
-            print(f"Order {order_id} inventory reserved -> PAYMENT_PENDING (correlation_id={correlation_id})", flush=True)
-            logger.info("Order %s status updated to PAYMENT_PENDING correlation_id=%s", order_id, correlation_id)
+            logger.info(f"Order {order_id} status updated to PAYMENT_PENDING", extra={"order_id": order_id, "correlation_id": correlation_id})
         else:
             logger.warning("Order %s not found for InventoryReserved event", order_id)
 
@@ -68,10 +68,9 @@ def process_order_workflow_event(event: dict, db: Session) -> bool:
             "CANCELLED"
         )
         if updated:
-            print(f"Order {order_id} inventory rejected -> CANCELLED (correlation_id={correlation_id})", flush=True)
-            logger.info("Order %s status updated to CANCELLED correlation_id=%s", order_id, correlation_id)
+            logger.info(f"Order {order_id} status updated to CANCELLED", extra={"order_id": order_id, "correlation_id": correlation_id, "event": event_type})
         else:
-            logger.warning("Order %s not found for InventoryRejected event", order_id)
+            logger.warning(f"Order {order_id} not found for InventoryRejected event", extra={"order_id": order_id, "correlation_id": correlation_id})
 
     elif event_type == "PaymentCompleted":
         updated = order_repository.update_order_status(
@@ -80,10 +79,9 @@ def process_order_workflow_event(event: dict, db: Session) -> bool:
             "CONFIRMED"
         )
         if updated:
-            print(f"Order {order_id} payment completed -> CONFIRMED (correlation_id={correlation_id})", flush=True)
-            logger.info("Order %s status updated to CONFIRMED correlation_id=%s", order_id, correlation_id)
+            logger.info(f"Order {order_id} status updated to CONFIRMED", extra={"order_id": order_id, "correlation_id": correlation_id, "event": event_type})
         else:
-            logger.warning("Order %s not found for PaymentCompleted event", order_id)
+            logger.warning(f"Order {order_id} not found for PaymentCompleted event", extra={"order_id": order_id, "correlation_id": correlation_id})
 
     elif event_type == "PaymentFailed":
         updated = order_repository.update_order_status(
@@ -92,10 +90,9 @@ def process_order_workflow_event(event: dict, db: Session) -> bool:
             "CANCELLED"
         )
         if updated:
-            print(f"Order {order_id} payment failed -> CANCELLED (correlation_id={correlation_id})", flush=True)
-            logger.info("Order %s status updated to CANCELLED correlation_id=%s", order_id, correlation_id)
+            logger.info(f"Order {order_id} status updated to CANCELLED", extra={"order_id": order_id, "correlation_id": correlation_id, "event": event_type})
         else:
-            logger.warning("Order %s not found for PaymentFailed event", order_id)
+            logger.warning(f"Order {order_id} not found for PaymentFailed event", extra={"order_id": order_id, "correlation_id": correlation_id})
 
     elif event_type == "InventoryReleased":
         print(f"Order {order_id} inventory released (correlation_id={correlation_id})", flush=True)

@@ -1,3 +1,5 @@
+import logging
+import time
 import uuid
 import httpx
 from fastapi import FastAPI, Request, Response, Depends, HTTPException
@@ -5,6 +7,7 @@ from pydantic import BaseModel
 
 try:
     from app.config import settings
+    from app.logging_config import configure_logging
     from app.auth.security import (
         USERS,
         create_access_token,
@@ -14,6 +17,7 @@ try:
     )
 except ImportError:
     from gateway.app.config import settings
+    from gateway.app.logging_config import configure_logging
     from gateway.app.auth.security import (
         USERS,
         create_access_token,
@@ -22,11 +26,46 @@ except ImportError:
         require_role,
     )
 
+configure_logging("gateway")
+logger = logging.getLogger("gateway.http")
+
 app = FastAPI(
     title="Cloud Order Platform API Gateway"
 )
 
 ORDER_SERVICE_URL = settings.order_service_url
+
+
+@app.middleware("http")
+async def gateway_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+
+    request.state.request_id = request_id
+    request.state.correlation_id = correlation_id
+
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+    logger.info(
+        f"{request.method} {request.url.path} -> {response.status_code} in {duration_ms}ms",
+        extra={
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+            "event": "gateway_request",
+            "extra_data": {
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms
+            }
+        }
+    )
+
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
 
 
 class LoginRequest(BaseModel):

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 import uuid
@@ -10,6 +11,7 @@ try:
     from database import SessionLocal
     from repository import (
         create_payment,
+        get_payment_by_order_id,
         event_already_processed,
         mark_event_processed,
     )
@@ -20,6 +22,7 @@ except ImportError:
     from services.payment.database import SessionLocal
     from services.payment.repository import (
         create_payment,
+        get_payment_by_order_id,
         event_already_processed,
         mark_event_processed,
     )
@@ -27,6 +30,7 @@ except ImportError:
     from services.payment.publisher import publish_payment_event
     from services.payment.events import Event
 
+logger = logging.getLogger("payment-service")
 
 RABBITMQ_HOST = os.getenv(
     "RABBITMQ_HOST",
@@ -42,17 +46,18 @@ def handle_inventory_reserved(event: dict, db: Session) -> bool:
     order_id = payload.get("order_id")
     amount = float(payload.get("amount", 0.0))
 
-    print(
-        f"event_type={event_type} "
-        f"event_id={event_id} "
-        f"correlation_id={correlation_id} "
-        f"order_id={order_id} "
-        f"amount={amount}",
-        flush=True
+    logger.info(
+        f"Processing payment for order {order_id} (amount={amount})",
+        extra={
+            "event_type": event_type,
+            "event_id": event_id,
+            "correlation_id": correlation_id,
+            "order_id": order_id
+        }
     )
 
     if event_id and event_already_processed(db, event_id):
-        print(f"Event {event_id} already processed by Payment Service, skipping", flush=True)
+        logger.info(f"Event {event_id} already processed by Payment Service, skipping", extra={"event_id": event_id, "correlation_id": correlation_id})
         return True
 
     if not order_id:

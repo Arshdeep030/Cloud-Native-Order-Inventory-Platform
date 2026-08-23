@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 import uuid
@@ -29,6 +30,7 @@ except ImportError:
     from services.inventory.publisher import publish_inventory_event
     from services.inventory.events import Event
 
+logger = logging.getLogger("inventory-service")
 
 RABBITMQ_HOST = os.getenv(
     "RABBITMQ_HOST",
@@ -45,16 +47,18 @@ def handle_order_created(event: dict, db: Session) -> bool:
     amount = payload.get("total_amount", payload.get("amount", 0.0))
     items = payload.get("items", [])
 
-    print(
-        f"event_type={event_type} "
-        f"event_id={event_id} "
-        f"correlation_id={correlation_id} "
-        f"order_id={order_id}",
-        flush=True
+    logger.info(
+        f"Processing {event_type} for order {order_id}",
+        extra={
+            "event_type": event_type,
+            "event_id": event_id,
+            "correlation_id": correlation_id,
+            "order_id": order_id
+        }
     )
 
     if event_id and event_already_processed(db, event_id):
-        print(f"Event {event_id} already processed by Inventory Service, skipping", flush=True)
+        logger.info(f"Event {event_id} already processed by Inventory Service, skipping", extra={"event_id": event_id, "correlation_id": correlation_id})
         return True
 
     for item in items:
