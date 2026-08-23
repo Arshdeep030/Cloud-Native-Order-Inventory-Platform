@@ -1,5 +1,4 @@
 .git
-.github
 .venv
 venv
 __pycache__
@@ -8,6 +7,3 @@ __pycache__
 .env
 .DS_Store
 tests
-README.md
-prometheus
-grafana
