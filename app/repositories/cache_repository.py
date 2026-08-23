@@ -1,18 +1,22 @@
 import json
+import logging
 
 from app.cache import redis_client
+
+logger = logging.getLogger("cloud-order-platform.cache")
 
 
 class CacheRepository:
 
     def get(self, key: str):
-
-        value = redis_client.get(key)
-
-        if value is None:
+        try:
+            value = redis_client.get(key)
+            if value is None:
+                return None
+            return json.loads(value)
+        except Exception as e:
+            logger.warning(f"Redis cache get failed for key {key}: {e}")
             return None
-
-        return json.loads(value)
 
     def set(
         self,
@@ -20,16 +24,20 @@ class CacheRepository:
         value,
         expiration: int = 300
     ):
-
-        redis_client.set(
-            key,
-            json.dumps(value),
-            ex=expiration
-        )
+        try:
+            redis_client.set(
+                key,
+                json.dumps(value),
+                ex=expiration
+            )
+        except Exception as e:
+            logger.warning(f"Redis cache set failed for key {key}: {e}")
 
     def delete(self, key: str):
-
-        redis_client.delete(key)
+        try:
+            redis_client.delete(key)
+        except Exception as e:
+            logger.warning(f"Redis cache delete failed for key {key}: {e}")
 
 
 cache_repository = CacheRepository()
