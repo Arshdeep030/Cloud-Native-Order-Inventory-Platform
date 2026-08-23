@@ -149,3 +149,11 @@ def test_admin_authorization_admin_allowed(mock_delete):
 
     assert response.status_code == 200
     assert response.json()["message"] == "Product deleted successfully"
+
+
+def test_gateway_metrics():
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "gateway_http_requests_total" in response.text
+    assert "gateway_http_request_duration_seconds" in response.text
+

@@ -16,7 +16,7 @@ from app.repositories.idempotency_repository import idempotency_repository
 from app.repositories.cache_repository import cache_repository
 from app.messaging.events import Event, create_correlation_id
 from app.messaging.publisher import publish_order_created
-from app.metrics import ORDERS_CREATED_TOTAL
+from app.metrics import ORDERS_CREATED_TOTAL, ORDERS_FAILED_TOTAL
 
 
 logger = logging.getLogger(
@@ -187,6 +187,7 @@ class OrderService:
             raise
 
         except Exception:
+            ORDERS_FAILED_TOTAL.inc()
             db.rollback()
             raise
 

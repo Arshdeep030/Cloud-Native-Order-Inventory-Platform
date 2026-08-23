@@ -4,6 +4,7 @@ import uuid
 import httpx
 from fastapi import FastAPI, Request, Response, Depends, HTTPException
 from pydantic import BaseModel
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 try:
     from app.config import settings
@@ -29,6 +30,18 @@ except ImportError:
 configure_logging("gateway")
 logger = logging.getLogger("gateway.http")
 
+GATEWAY_HTTP_REQUESTS_TOTAL = Counter(
+    "gateway_http_requests_total",
+    "Total HTTP requests received by Gateway",
+    ["method", "endpoint", "status"]
+)
+
+GATEWAY_HTTP_DURATION_SECONDS = Histogram(
+    "gateway_http_request_duration_seconds",
+    "Gateway HTTP request duration in seconds",
+    ["method", "endpoint"]
+)
+
 app = FastAPI(
     title="Cloud Order Platform API Gateway"
 )
@@ -46,7 +59,19 @@ async def gateway_logging_middleware(request: Request, call_next):
 
     start_time = time.perf_counter()
     response = await call_next(request)
-    duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    duration_s = time.perf_counter() - start_time
+    duration_ms = round(duration_s * 1000, 2)
+
+    GATEWAY_HTTP_REQUESTS_TOTAL.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status=str(response.status_code)
+    ).inc()
+
+    GATEWAY_HTTP_DURATION_SECONDS.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration_s)
 
     logger.info(
         f"{request.method} {request.url.path} -> {response.status_code} in {duration_ms}ms",
@@ -261,3 +286,11 @@ def liveness():
 @app.get("/health/ready")
 def readiness():
     return {"status": "ready"}
+
+
+@app.get("/metrics")
+def gateway_metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )

@@ -21,6 +21,12 @@ ORDERS_CREATED_TOTAL = Counter(
 )
 
 
+ORDERS_FAILED_TOTAL = Counter(
+    "orders_failed_total",
+    "Total number of failed orders",
+)
+
+
 PRODUCTS_CREATED_TOTAL = Counter(
     "products_created_total",
     "Total number of products created",
