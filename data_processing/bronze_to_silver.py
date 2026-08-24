@@ -14,9 +14,10 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from data_processing.quality import DataQualityValidator
+
 logger = logging.getLogger("bronze_to_silver")
 
-# Explicit PySpark Schemas for Schema Enforcement
 RAW_EVENT_SCHEMA = StructType(
     [
         StructField("event_id", StringType(), False),
@@ -58,10 +59,23 @@ RAW_EVENT_SCHEMA = StructType(
 
 class BronzeToSilverTransformer:
 
-    def __init__(self, spark: SparkSession, bronze_path: str, silver_path: str):
+    def __init__(
+        self,
+        spark: SparkSession,
+        bronze_path: str,
+        silver_path: str,
+        quarantine_path: Optional[str] = None,
+        storage_format: str = "parquet",
+    ):
         self.spark = spark
         self.bronze_path = Path(bronze_path)
         self.silver_path = Path(silver_path)
+        self.quarantine_path = (
+            Path(quarantine_path)
+            if quarantine_path
+            else self.silver_path.parent / "quarantine"
+        )
+        self.storage_format = storage_format
 
     def _path_has_files(self, domain: str) -> bool:
         domain_path = self.bronze_path / domain
@@ -81,11 +95,10 @@ class BronzeToSilverTransformer:
             .json(orders_dir)
         )
 
-        # 1. Deduplication by unique event_id
         dedup_df = raw_df.dropDuplicates(["event_id"])
 
-        # 2. Extract & clean OrderCreated events (Data Quality: non-null order_id, total_amount >= 0)
-        orders_df = (
+        # 1. Extract raw order rows
+        raw_orders_df = (
             dedup_df.filter(F.col("event_type") == "OrderCreated")
             .select(
                 F.col("payload.order_id").alias("order_id"),
@@ -96,44 +109,51 @@ class BronzeToSilverTransformer:
                 F.col("event_id"),
                 F.lit("CONFIRMED").alias("order_status"),
             )
-            .filter(
-                F.col("order_id").isNotNull()
-                & (F.col("total_amount") >= 0.0)
-                & F.col("order_timestamp").isNotNull()
-            )
         )
 
+        # 2. Data Quality & Quarantine Validation
+        valid_orders_df, invalid_orders_df = DataQualityValidator.validate_orders(raw_orders_df)
+
+        # Write clean orders to Silver
         orders_output = str(self.silver_path / "orders")
-        orders_df.write.mode("overwrite").parquet(orders_output)
-        logger.info(f"Written Silver orders -> {orders_output} ({orders_df.count()} rows)")
+        valid_orders_df.write.mode("overwrite").format(self.storage_format).save(orders_output)
+        logger.info(f"Written Silver orders -> {orders_output} ({valid_orders_df.count()} rows)")
 
-        # 3. Extract & clean Order Items (Data Quality: quantity > 0, unit_price >= 0)
-        items_df = (
-            dedup_df.filter(F.col("event_type") == "OrderCreated")
-            .select(
-                F.col("payload.order_id").alias("order_id"),
-                F.to_timestamp(F.col("occurred_at")).alias("order_timestamp"),
-                F.explode(F.col("payload.items")).alias("item"),
-            )
-            .select(
-                F.col("order_id"),
-                F.col("item.product_id").alias("product_id"),
-                F.col("item.quantity").alias("quantity"),
-                F.col("item.unit_price").alias("unit_price"),
-                F.col("order_timestamp"),
-            )
-            .filter(
-                F.col("product_id").isNotNull()
-                & (F.col("quantity") > 0)
-                & (F.col("unit_price") >= 0.0)
-            )
-        )
+        # Write rejected records to Quarantine
+        if invalid_orders_df.count() > 0:
+            quarantine_orders = str(self.quarantine_path / "invalid_orders")
+            invalid_orders_df.write.mode("append").format(self.storage_format).save(quarantine_orders)
+            logger.warning(f"Quarantined {invalid_orders_df.count()} invalid orders -> {quarantine_orders}")
 
-        items_output = str(self.silver_path / "order_items")
-        items_df.write.mode("overwrite").parquet(items_output)
-        logger.info(f"Written Silver order_items -> {items_output} ({items_df.count()} rows)")
+        # 3. Extract and validate Order Items
+        if "items" in raw_df.select("payload.*").columns:
+            raw_items_df = (
+                dedup_df.filter(F.col("event_type") == "OrderCreated")
+                .select(
+                    F.col("payload.order_id").alias("order_id"),
+                    F.to_timestamp(F.col("occurred_at")).alias("order_timestamp"),
+                    F.explode(F.col("payload.items")).alias("item"),
+                )
+                .select(
+                    F.col("order_id"),
+                    F.col("item.product_id").alias("product_id"),
+                    F.col("item.quantity").alias("quantity"),
+                    F.col("item.unit_price").alias("unit_price"),
+                    F.col("order_timestamp"),
+                )
+            )
 
-        return orders_df
+            valid_items_df, invalid_items_df = DataQualityValidator.validate_order_items(raw_items_df)
+
+            items_output = str(self.silver_path / "order_items")
+            valid_items_df.write.mode("overwrite").format(self.storage_format).save(items_output)
+            logger.info(f"Written Silver order_items -> {items_output} ({valid_items_df.count()} rows)")
+
+            if invalid_items_df.count() > 0:
+                quarantine_items = str(self.quarantine_path / "invalid_order_items")
+                invalid_items_df.write.mode("append").format(self.storage_format).save(quarantine_items)
+
+        return valid_orders_df
 
     def process_inventory(self) -> Optional[DataFrame]:
         if not self._path_has_files("inventory"):
@@ -162,7 +182,7 @@ class BronzeToSilverTransformer:
             .filter(F.col("order_id").isNotNull())
         )
         reserved_out = str(self.silver_path / "inventory" / "inventory_reserved")
-        reserved_df.write.mode("overwrite").parquet(reserved_out)
+        reserved_df.write.mode("overwrite").format(self.storage_format).save(reserved_out)
 
         # 2. Inventory Rejected
         rejected_df = (
@@ -177,7 +197,7 @@ class BronzeToSilverTransformer:
             .filter(F.col("order_id").isNotNull())
         )
         rejected_out = str(self.silver_path / "inventory" / "inventory_rejected")
-        rejected_df.write.mode("overwrite").parquet(rejected_out)
+        rejected_df.write.mode("overwrite").format(self.storage_format).save(rejected_out)
 
         # 3. Inventory Released
         released_df = (
@@ -191,7 +211,7 @@ class BronzeToSilverTransformer:
             .filter(F.col("order_id").isNotNull())
         )
         released_out = str(self.silver_path / "inventory" / "inventory_released")
-        released_df.write.mode("overwrite").parquet(released_out)
+        released_df.write.mode("overwrite").format(self.storage_format).save(released_out)
 
         # Consolidated inventory events
         all_inv_df = (
@@ -205,8 +225,8 @@ class BronzeToSilverTransformer:
             .filter(F.col("order_id").isNotNull())
         )
         inv_events_out = str(self.silver_path / "inventory_events")
-        all_inv_df.write.mode("overwrite").parquet(inv_events_out)
-        logger.info(f"Written Silver inventory tables -> {inv_events_out} ({all_inv_df.count()} rows)")
+        all_inv_df.write.mode("overwrite").format(self.storage_format).save(inv_events_out)
+        logger.info(f"Written Silver inventory -> {inv_events_out} ({all_inv_df.count()} rows)")
         return all_inv_df
 
     def process_payments(self) -> Optional[DataFrame]:
@@ -237,10 +257,16 @@ class BronzeToSilverTransformer:
                 F.to_timestamp(F.col("occurred_at")).alias("payment_timestamp"),
                 F.col("correlation_id"),
             )
-            .filter(F.col("order_id").isNotNull() & (F.col("amount") >= 0.0))
+            .filter(F.col("order_id").isNotNull())
         )
+
+        valid_payments, invalid_payments = DataQualityValidator.validate_payments(completed_df)
         completed_out = str(self.silver_path / "payments" / "payment_completed")
-        completed_df.write.mode("overwrite").parquet(completed_out)
+        valid_payments.write.mode("overwrite").format(self.storage_format).save(completed_out)
+
+        if invalid_payments.count() > 0:
+            quarantine_payments = str(self.quarantine_path / "invalid_payments")
+            invalid_payments.write.mode("append").format(self.storage_format).save(quarantine_payments)
 
         # 2. Payment Failed
         failed_df = (
@@ -260,9 +286,9 @@ class BronzeToSilverTransformer:
             .filter(F.col("order_id").isNotNull())
         )
         failed_out = str(self.silver_path / "payments" / "payment_failed")
-        failed_df.write.mode("overwrite").parquet(failed_out)
+        failed_df.write.mode("overwrite").format(self.storage_format).save(failed_out)
 
-        # Consolidated payments table for downstream analytics
+        # Consolidated payments table
         payments_df = (
             dedup_df.select(
                 F.coalesce(
@@ -277,10 +303,10 @@ class BronzeToSilverTransformer:
                 F.to_timestamp(F.col("occurred_at")).alias("payment_timestamp"),
                 F.col("correlation_id"),
             )
-            .filter(F.col("order_id").isNotNull() & (F.col("amount") >= 0.0))
+            .filter(F.col("order_id").isNotNull())
         )
         payments_output = str(self.silver_path / "payments")
-        payments_df.write.mode("overwrite").parquet(payments_output)
+        payments_df.write.mode("overwrite").format(self.storage_format).save(payments_output)
         logger.info(f"Written Silver payments -> {payments_output} ({payments_df.count()} rows)")
         return payments_df
 

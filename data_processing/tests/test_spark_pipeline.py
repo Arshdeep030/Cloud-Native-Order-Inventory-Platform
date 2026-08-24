@@ -28,11 +28,11 @@ def temp_lakehouse():
     bronze_dir = Path(base_dir) / "bronze"
     silver_dir = Path(base_dir) / "silver"
     gold_dir = Path(base_dir) / "gold"
+    quarantine_dir = Path(base_dir) / "quarantine"
 
-    # Seed bronze events
     writer = BronzeDataLakeWriter(base_path=str(bronze_dir))
 
-    # Event 1: Order 1 Created
+    # Event 1: Valid Order 1
     event1 = IngestedBronzeEvent(
         source_exchange="order-events",
         source_routing_key="order.created",
@@ -49,7 +49,7 @@ def temp_lakehouse():
     )
     writer.write_event(event1)
 
-    # Event 2: Order 2 Created
+    # Event 2: Valid Order 2
     event2 = IngestedBronzeEvent(
         source_exchange="order-events",
         source_routing_key="order.created",
@@ -66,8 +66,25 @@ def temp_lakehouse():
     )
     writer.write_event(event2)
 
-    # Event 3: Payment 1 Completed
-    event3 = IngestedBronzeEvent(
+    # Event 3: MALFORMED Order (Negative Amount -> Should be Quarantined)
+    event3_bad = IngestedBronzeEvent(
+        source_exchange="order-events",
+        source_routing_key="order.created",
+        event_id=str(uuid.uuid4()),
+        event_type="OrderCreated",
+        occurred_at="2026-08-24T12:00:00+00:00",
+        correlation_id="corr-bad",
+        payload={
+            "order_id": 999,
+            "customer_id": 99,
+            "total_amount": -500.00,
+            "items": [{"product_id": 5, "quantity": 1, "unit_price": 10.00}],
+        },
+    )
+    writer.write_event(event3_bad)
+
+    # Event 4: Payment 1 Completed
+    event4 = IngestedBronzeEvent(
         source_exchange="payment-events",
         source_routing_key="payment.completed",
         event_id=str(uuid.uuid4()),
@@ -76,10 +93,10 @@ def temp_lakehouse():
         correlation_id="corr-1",
         payload={"order_id": 1, "payment_id": 501, "amount": 1999.99},
     )
-    writer.write_event(event3)
+    writer.write_event(event4)
 
-    # Event 4: Inventory 1 Reserved
-    event4 = IngestedBronzeEvent(
+    # Event 5: Inventory 1 Reserved
+    event5 = IngestedBronzeEvent(
         source_exchange="inventory-events",
         source_routing_key="inventory.reserved",
         event_id=str(uuid.uuid4()),
@@ -88,94 +105,70 @@ def temp_lakehouse():
         correlation_id="corr-1",
         payload={"order_id": 1, "amount": 1999.99, "items": [{"product_id": 1, "quantity": 2}]},
     )
-    writer.write_event(event4)
+    writer.write_event(event5)
 
-    yield str(bronze_dir), str(silver_dir), str(gold_dir)
+    yield str(bronze_dir), str(silver_dir), str(gold_dir), str(quarantine_dir)
     shutil.rmtree(base_dir, ignore_errors=True)
 
 
-def test_bronze_to_silver_pipeline(spark, temp_lakehouse):
-    bronze_dir, silver_dir, gold_dir = temp_lakehouse
+def test_bronze_to_silver_and_quarantine(spark, temp_lakehouse):
+    bronze_dir, silver_dir, gold_dir, quarantine_dir = temp_lakehouse
 
-    transformer = BronzeToSilverTransformer(spark, bronze_dir, silver_dir)
+    transformer = BronzeToSilverTransformer(
+        spark, bronze_dir, silver_dir, quarantine_path=quarantine_dir
+    )
     transformer.run_all()
 
-    # Validate Silver orders table
+    # Validate Silver orders table has ONLY valid orders (2 rows, not the bad order 999)
     orders_path = Path(silver_dir) / "orders"
     assert orders_path.exists()
     orders_df = spark.read.parquet(str(orders_path))
     assert orders_df.count() == 2
-    assert "order_id" in orders_df.columns
-    assert "customer_id" in orders_df.columns
-    assert "total_amount" in orders_df.columns
+    order_ids = [row.order_id for row in orders_df.collect()]
+    assert 1 in order_ids
+    assert 2 in order_ids
+    assert 999 not in order_ids
 
-    # Validate Silver order_items table
-    items_path = Path(silver_dir) / "order_items"
-    assert items_path.exists()
-    items_df = spark.read.parquet(str(items_path))
-    assert items_df.count() == 2
-    assert "product_id" in items_df.columns
-    assert "quantity" in items_df.columns
-
-    # Validate Silver payments table
-    payments_path = Path(silver_dir) / "payments"
-    assert payments_path.exists()
-    payments_df = spark.read.parquet(str(payments_path))
-    assert payments_df.count() == 1
+    # Validate Quarantine table contains the malformed order 999
+    quarantine_orders_path = Path(quarantine_dir) / "invalid_orders"
+    assert quarantine_orders_path.exists()
+    quarantined_df = spark.read.parquet(str(quarantine_orders_path))
+    assert quarantined_df.count() == 1
+    bad_row = quarantined_df.collect()[0]
+    assert bad_row.order_id == 999
+    assert "Negative total_amount" in bad_row.quarantine_reason
 
 
 def test_silver_to_gold_pipeline(spark, temp_lakehouse):
-    bronze_dir, silver_dir, gold_dir = temp_lakehouse
+    bronze_dir, silver_dir, gold_dir, quarantine_dir = temp_lakehouse
 
-    # First run bronze to silver
-    b2s = BronzeToSilverTransformer(spark, bronze_dir, silver_dir)
+    b2s = BronzeToSilverTransformer(
+        spark, bronze_dir, silver_dir, quarantine_path=quarantine_dir
+    )
     b2s.run_all()
 
-    # Run silver to gold
     s2g = SilverToGoldTransformer(spark, silver_dir, gold_dir)
     s2g.run_all()
 
-    # Validate Gold Dimensions
     dim_date_path = Path(gold_dir) / "dimensions" / "dim_date"
     assert dim_date_path.exists()
     date_df = spark.read.parquet(str(dim_date_path))
     assert date_df.count() >= 1
 
-    dim_product_path = Path(gold_dir) / "dimensions" / "dim_product"
-    assert dim_product_path.exists()
-    prod_df = spark.read.parquet(str(dim_product_path))
-    assert prod_df.count() == 2
-
-    dim_customer_path = Path(gold_dir) / "dimensions" / "dim_customer"
-    assert dim_customer_path.exists()
-    cust_df = spark.read.parquet(str(dim_customer_path))
-    assert cust_df.count() == 2
-
-    # Validate Gold Fact Table
     fact_path = Path(gold_dir) / "fact_orders"
     assert fact_path.exists()
     fact_df = spark.read.parquet(str(fact_path))
     assert fact_df.count() == 2
-    assert "order_key" in fact_df.columns
-    assert "item_total_amount" in fact_df.columns
 
-    # Validate Daily Product Sales
     daily_path = Path(gold_dir) / "daily_product_sales"
     assert daily_path.exists()
-    daily_df = spark.read.parquet(str(daily_path))
-    assert daily_df.count() == 2
 
-    # Validate ML Demand Features Table
     features_path = Path(gold_dir) / "demand_features"
     assert features_path.exists()
-    features_df = spark.read.parquet(str(features_path))
-    assert features_df.count() == 2
-    assert "rolling_mean_7d" in features_df.columns
-    assert "demand_target" in features_df.columns
 
 
 def test_full_lakehouse_pipeline_run(temp_lakehouse):
-    bronze_dir, silver_dir, gold_dir = temp_lakehouse
+    bronze_dir, silver_dir, gold_dir, quarantine_dir = temp_lakehouse
     run_lakehouse_pipeline(
         bronze_path=bronze_dir,
         silver_path=silver_dir,

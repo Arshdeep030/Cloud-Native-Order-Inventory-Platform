@@ -15,6 +15,15 @@ class ProcessingConfig(BaseModel):
     gold_path: str = Field(
         default_factory=lambda: os.getenv("GOLD_PATH", "./data/lake/gold")
     )
+    quarantine_path: str = Field(
+        default_factory=lambda: os.getenv("QUARANTINE_PATH", "./data/lake/quarantine")
+    )
+    storage_format: str = Field(
+        default_factory=lambda: os.getenv("STORAGE_FORMAT", "parquet")
+    )
+    adls_account_name: str = Field(
+        default_factory=lambda: os.getenv("ADLS_ACCOUNT_NAME", "cloudorderadls01")
+    )
 
 
 config = ProcessingConfig()
