@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 .env
 .DS_Store
+data/
+scratch/
+metastore_db/
+derby.log
