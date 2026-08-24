@@ -9,3 +9,5 @@ data/
 scratch/
 metastore_db/
 derby.log
+mlflow.db
+mlruns/

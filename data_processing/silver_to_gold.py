@@ -155,26 +155,10 @@ class SilverToGoldTransformer:
 
         df = self.spark.read.parquet(str(daily_path))
 
-        # Window specification partitioned by product and ordered by date
-        w_prod = Window.partitionBy("product_id").orderBy("date")
+        from data_processing.feature_store import DemandFeatureStoreBuilder
+        builder = DemandFeatureStoreBuilder(self.spark, gold_path=str(self.gold_path))
+        return builder.build_features_from_daily_sales(df)
 
-        # Feature Engineering: Lag features, moving averages, date parts
-        features_df = (
-            df.withColumn("day_of_week", F.dayofweek(F.col("date")))
-            .withColumn("month", F.month(F.col("date")))
-            .withColumn("lag_1_demand", F.coalesce(F.lag("units_sold", 1).over(w_prod), F.col("units_sold")))
-            .withColumn("lag_7_demand", F.coalesce(F.lag("units_sold", 7).over(w_prod), F.col("units_sold")))
-            .withColumn(
-                "rolling_mean_7d",
-                F.coalesce(F.avg("units_sold").over(w_prod.rowsBetween(-6, 0)), F.col("units_sold")),
-            )
-            .withColumn("demand_target", F.col("units_sold"))
-        )
-
-        features_out = str(self.gold_path / "demand_features")
-        features_df.write.mode("overwrite").parquet(features_out)
-        logger.info(f"Written Gold demand_features -> {features_out}")
-        return features_df
 
     def run_all(self):
         logger.info(f"Starting Silver -> Gold transformation from {self.silver_path} to {self.gold_path}")
