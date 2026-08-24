@@ -206,3 +206,8 @@ def start_order_event_consumer():
     )
 
     channel.start_consuming()
+
+
+if __name__ == "__main__":
+    start_order_event_consumer()
+
