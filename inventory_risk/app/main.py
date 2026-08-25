@@ -31,12 +31,23 @@ publisher = RabbitMQRiskPublisher()
 
 @app.get("/health", tags=["Health"])
 async def health_check():
+    """Liveness probe."""
     return {
         "status": "healthy",
+        "service": "inventory-risk-service",
+    }
+
+
+@app.get("/ready", tags=["Health"])
+async def readiness_check():
+    """Readiness probe."""
+    return {
+        "status": "ready",
         "service": "inventory-risk-service",
         "ml_service_url": settings.ml_service_url,
         "exchange": settings.rabbitmq_exchange,
     }
+
 
 
 @app.post(

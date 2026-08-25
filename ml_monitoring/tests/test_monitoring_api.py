@@ -18,6 +18,15 @@ def test_health_endpoint(client):
     assert data["service"] == "ml-monitoring-service"
 
 
+def test_readiness_endpoint(client):
+    response = client.get("/ready")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ready"
+    assert "logs_path" in data
+
+
+
 def test_log_prediction_endpoint(client):
     payload = {
         "prediction_id": "test-api-pred-1",

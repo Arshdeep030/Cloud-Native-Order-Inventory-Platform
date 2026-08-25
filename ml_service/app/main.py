@@ -50,15 +50,27 @@ app = FastAPI(
 )
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
+@app.get("/health", tags=["Health"])
 async def health_check():
-    """Liveness and readiness health probe."""
+    """Liveness probe: confirms application process is running."""
+    return {"status": "healthy", "service": "ml-inference-service"}
+
+
+@app.get("/ready", response_model=HealthResponse, tags=["Health"])
+async def readiness_check():
+    """Readiness probe: confirms ML model is loaded and ready for inference traffic."""
     is_loaded = predictor is not None and predictor.model.is_fitted
+    if not is_loaded:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ML model artifact is not yet loaded or initialized.",
+        )
     return HealthResponse(
-        status="healthy" if is_loaded else "degraded",
-        model_loaded=is_loaded,
+        status="ready",
+        model_loaded=True,
         service="ml-inference-service",
     )
+
 
 
 @app.get("/model/info", response_model=ModelInfoResponse, tags=["Model Info"])

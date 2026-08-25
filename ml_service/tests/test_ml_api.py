@@ -15,7 +15,16 @@ def test_health_endpoint(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
+    assert data["service"] == "ml-inference-service"
+
+
+def test_readiness_endpoint(client):
+    response = client.get("/ready")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ready"
     assert data["model_loaded"] is True
+
     assert "timestamp" in data
 
 

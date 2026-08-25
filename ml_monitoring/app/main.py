@@ -58,12 +58,23 @@ async def track_latency_middleware(request: Request, call_next):
 
 @app.get("/health", tags=["Health"])
 async def health_check():
+    """Liveness probe."""
     return {
         "status": "healthy",
+        "service": "ml-monitoring-service",
+    }
+
+
+@app.get("/ready", tags=["Health"])
+async def readiness_check():
+    """Readiness probe."""
+    return {
+        "status": "ready",
         "service": "ml-monitoring-service",
         "logs_path": settings.prediction_logs_path,
         "psi_critical_threshold": settings.psi_critical_threshold,
     }
+
 
 
 @app.post(
