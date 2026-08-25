@@ -1,0 +1,64 @@
+name: ML Demand Forecasting Training & Model Gate Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_version:
+        description: "Dataset version identifier"
+        required: true
+        default: "demand_features_v1"
+      n_optuna_trials:
+        description: "Number of Optuna tuning trials"
+        required: false
+        default: "25"
+      force_retrain:
+        description: "Force training even if gate fails"
+        required: false
+        default: "false"
+
+  schedule:
+    # Weekly retraining cadence at 02:00 UTC on Mondays
+    - cron: "0 2 * * 1"
+
+jobs:
+  train-and-evaluate:
+    name: Execute ML Training Pipeline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r ml_service/requirements.txt
+          pip install -r ml_monitoring/requirements.txt
+
+      - name: Run Full Test Suite Gate
+        run: |
+          PYTHONPATH=. pytest -v
+
+      - name: Run ML Training & Acceptance Gate
+        run: |
+          PYTHONPATH=. python ml/train.py
+
+      - name: Upload Trained Model Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: demand-forecast-model
+          path: models/demand_forecast_model.json
+          retention-days: 30
+
+      - name: Upload MLflow Experiment Database
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-database
+          path: mlflow.db
+          retention-days: 30

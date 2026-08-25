@@ -26,13 +26,20 @@ class ModelApprovalReport:
     strongest_baseline: str
     mae_improvement_pct: float
     rmse_improvement_pct: float
-    rejection_reasons: List[str]
+    current_production_metrics: Optional[Dict[str, float]] = None
+    improvement_vs_production_pct: Optional[float] = None
+    rejection_reasons: List[str] = None
+
+    def __post_init__(self):
+        if self.rejection_reasons is None:
+            self.rejection_reasons = []
 
 
 class ModelAcceptanceGate:
     """
     Evaluates candidate models on the untouched Test partition against
-    baseline models and enforces deployment acceptance criteria.
+    both baseline benchmark models AND the currently active production model.
+    Enforces regression protection and deployment quality criteria.
     """
 
     def __init__(
@@ -40,19 +47,22 @@ class ModelAcceptanceGate:
         target_column: str = TARGET_COLUMN,
         max_acceptable_mape: float = 35.0,
         min_required_mae_improvement_pct: float = 0.0,
+        regression_tolerance_pct: float = 5.0,  # candidate can't be >5% worse than current prod
     ):
         self.target_column = target_column
         self.max_acceptable_mape = max_acceptable_mape
         self.min_required_mae_improvement_pct = min_required_mae_improvement_pct
+        self.regression_tolerance_pct = regression_tolerance_pct
         self.baseline_evaluator = BaselineEvaluator(target_column=target_column)
 
     def evaluate_and_gate(
         self,
         candidate_model: DemandForecastingXGBoost,
         test_df: pd.DataFrame,
+        current_production_model: Optional[DemandForecastingXGBoost] = None,
     ) -> ModelApprovalReport:
         """
-        Executes formal evaluation gate on Test set.
+        Executes formal evaluation gate on Test set against baselines and current production.
         """
         if self.target_column not in test_df.columns:
             raise ValueError(f"Target column '{self.target_column}' missing in test dataset.")
@@ -81,7 +91,7 @@ class ModelAcceptanceGate:
             best_base_mae = ma_mae
             best_base_rmse = ma_rmse
 
-        # 4. Improvement Percentages
+        # 4. Improvement Percentages vs Baseline
         mae_imp_pct = (
             ((best_base_mae - candidate_metrics.mae) / best_base_mae * 100.0)
             if best_base_mae > 0
@@ -93,9 +103,9 @@ class ModelAcceptanceGate:
             else 0.0
         )
 
-        # 5. Quality & Approval Gate Checks
         rejection_reasons = []
 
+        # 5. Baseline Comparison Checks
         if candidate_metrics.mae >= best_base_mae:
             rejection_reasons.append(
                 f"Candidate MAE ({candidate_metrics.mae:.2f}) failed to beat {strongest_baseline_name} MAE ({best_base_mae:.2f})"
@@ -106,10 +116,30 @@ class ModelAcceptanceGate:
                 f"Candidate MAPE ({candidate_metrics.mape:.1f}%) exceeds maximum threshold ({self.max_acceptable_mape:.1f}%)"
             )
 
-        if mae_imp_pct < self.min_required_mae_improvement_pct:
-            rejection_reasons.append(
-                f"MAE improvement ({mae_imp_pct:.1f}%) below minimum required ({self.min_required_mae_improvement_pct:.1f}%)"
-            )
+        # 6. Current Production Model Regression Protection Check
+        prod_metrics_dict: Optional[Dict[str, float]] = None
+        imp_vs_prod_pct: Optional[float] = None
+
+        if current_production_model is not None and current_production_model.is_fitted:
+            y_prod_preds = current_production_model.predict(test_df)
+            prod_metrics = calculate_metrics(y_true, y_prod_preds)
+            prod_metrics_dict = prod_metrics.to_dict()
+
+            if prod_metrics.mae > 0:
+                imp_vs_prod_pct = round(
+                    ((prod_metrics.mae - candidate_metrics.mae) / prod_metrics.mae * 100.0),
+                    2,
+                )
+            else:
+                imp_vs_prod_pct = 0.0
+
+            # Regression Guard: reject if candidate MAE is worse than production MAE by more than tolerance
+            max_allowed_mae = prod_metrics.mae * (1.0 + self.regression_tolerance_pct / 100.0)
+            if candidate_metrics.mae > max_allowed_mae:
+                rejection_reasons.append(
+                    f"Model Regression: Candidate MAE ({candidate_metrics.mae:.2f}) is worse than "
+                    f"current production model MAE ({prod_metrics.mae:.2f} + {self.regression_tolerance_pct}% tolerance)."
+                )
 
         is_approved = len(rejection_reasons) == 0
 
@@ -122,13 +152,18 @@ class ModelAcceptanceGate:
             strongest_baseline=strongest_baseline_name,
             mae_improvement_pct=round(mae_imp_pct, 2),
             rmse_improvement_pct=round(rmse_imp_pct, 2),
+            current_production_metrics=prod_metrics_dict,
+            improvement_vs_production_pct=imp_vs_prod_pct,
             rejection_reasons=rejection_reasons,
         )
 
         if is_approved:
+            prod_info = (
+                f" | +{imp_vs_prod_pct:.1f}% vs Prod" if imp_vs_prod_pct is not None else ""
+            )
             logger.info(
                 f"✅ Model APPROVED by Acceptance Gate! (MAE={candidate_metrics.mae:.2f}, "
-                f"Improvement={mae_imp_pct:.1f}% vs {strongest_baseline_name})"
+                f"Improvement={mae_imp_pct:.1f}% vs {strongest_baseline_name}{prod_info})"
             )
         else:
             logger.warning(

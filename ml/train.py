@@ -68,13 +68,30 @@ def run_training_pipeline(
         f"✓ Tuning complete. Best Validation MAE: {tuning_result.best_val_mae:.3f} | Best Params: {tuning_result.best_params}"
     )
 
-    # 5. Formal Model Acceptance Gate on Untouched Test Set
+    # 5. Formal Model Acceptance Gate on Untouched Test Set (with Regression Guard)
     logger.info("✓ Running Model Acceptance Gate on untouched Test Set...")
+    current_prod_model = None
+    local_prod_path = Path("./models/demand_forecast_model.json")
+    if local_prod_path.exists():
+        try:
+            from ml.models.xgboost_model import DemandForecastingXGBoost
+            current_prod_model = DemandForecastingXGBoost()
+            current_prod_model.load_model(str(local_prod_path))
+            logger.info("✓ Loaded current production model for regression comparison.")
+        except Exception as e:
+            logger.warning(f"Could not load current production model for comparison: {e}")
+
     gate = ModelAcceptanceGate(
         max_acceptable_mape=max_acceptable_mape,
         min_required_mae_improvement_pct=0.0,
+        regression_tolerance_pct=5.0,
     )
-    approval_report = gate.evaluate_and_gate(tuning_result.best_model, test_df)
+    approval_report = gate.evaluate_and_gate(
+        candidate_model=tuning_result.best_model,
+        test_df=test_df,
+        current_production_model=current_prod_model,
+    )
+
 
     # 6. MLflow Experiment Tracking & Model Registry Promotion
     logger.info(f"✓ Logging experiment to MLflow (Tracking URI: {tracking_uri})...")
